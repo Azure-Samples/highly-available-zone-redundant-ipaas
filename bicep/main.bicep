@@ -25,10 +25,12 @@ param servicebusQueueName string = 'Queue1'
 param apimPublisherEmail string = 'publisher@localtest.me'
 param apimPublisherName string = 'Publisher'
 
-@allowed(['Premium', 'Developer'])
-param apimSkuName string = 'Premium'
+@description('Optional. When true will deploy a cost-optimised environment for development purposes. Note that when this param is true, the deployment is not suitable or recommended for Production environments. Default = false.')
+param developmentEnvironment bool = false
 
-param enableDdosProtection bool = true
+param apimSslCertKeyVaultId string
+
+param apimUserIdentityId string
 
 
 // VARS
@@ -42,12 +44,15 @@ var vnet = '${applicationName}-vnet'
 var appGw = '${applicationName}-appgw'
 var appGwBackendRequestTimeout = 31   // seconds
 var appGwPublicFrontendIp = 'appGwPublicFrontendIp'
+var publicHttpListener = 'publicHttpListener'
 var publicHttpsListener = 'publicHttpsListener'
 var apimBackendPool = 'apimBackendPool'
 var backendHttpSettings = 'backendHttpSettings'
 var httpRedirectConfiguration = 'httpRedirectConfiguration'
 var appGwWafPolicy = '${applicationName}-appgw-waf'
 var appGwPip = '${applicationName}-appgw-pip'
+var appGwPublicSslCert = 'apimPublicSslCert'
+var appGwUserIdentity = 'appGwUserIdentity'
 
 // APIM
 var apim = '${applicationName}-apim'
@@ -57,7 +62,9 @@ var redis = '${applicationName}-cache'
 
 var servicebus = '${applicationName}-bus'
 
-var keyvault = '${applicationName}-kv'
+// Key vault name must be 3-24 chars
+var keyvault = '${take(applicationName, 21)}-kv'
+
 var redisConnectionStringSecretName = 'RedisConnectionString'
 var sqlConnectionStringSecretName = 'SqlConnectionString'
 
@@ -65,6 +72,8 @@ var sql = '${applicationName}-sql'
 
 var workspace = '${applicationName}-workspace'
 var insights = '${applicationName}-insights'
+
+var zones = ['1', '2', '3']
 
 // Role definition Ids for managed identity role assignments
 var roleDefinitionIds = {
@@ -119,11 +128,20 @@ var apimSuffixes = {
 
 
 // VNET
+//  Subnet consts
+var AppGwSubnet = 0
+var ApimSubnet = 1
+var StorageSubnet = 2
+var RedisSubnet = 3
+var ServiceBusSubnet = 4
+var KeyVaultSubnet = 5
+var SqlServerSubnet = 6
+
 resource vnetResource 'Microsoft.Network/virtualNetworks@2022-01-01' = {
   name: vnet
   location: location
   properties: {
-    enableDdosProtection: enableDdosProtection
+    enableDdosProtection: !developmentEnvironment
     addressSpace:{
       addressPrefixes:[
         '10.0.0.0/20'
@@ -148,7 +166,7 @@ resource vnetResource 'Microsoft.Network/virtualNetworks@2022-01-01' = {
           privateLinkServiceNetworkPolicies: 'Enabled'
         }
       }
-      // [3] Storage private endpoint subnet
+      // [2] Storage private endpoint subnet
       {
         name: 'storage-subnet'
         properties:{
@@ -157,7 +175,7 @@ resource vnetResource 'Microsoft.Network/virtualNetworks@2022-01-01' = {
           privateLinkServiceNetworkPolicies: 'Enabled'
         }
       }
-      // [4] Azure Cache for Redis private endpoint subnet
+      // [3] Azure Cache for Redis private endpoint subnet
       {
         name: 'redis-subnet'
         properties:{
@@ -166,7 +184,7 @@ resource vnetResource 'Microsoft.Network/virtualNetworks@2022-01-01' = {
           privateLinkServiceNetworkPolicies: 'Enabled'
         }
       }
-      // [5] Service Bus private endpoint subnet
+      // [4] Service Bus private endpoint subnet
       {
         name: 'servicebus-subnet'
         properties:{
@@ -175,20 +193,20 @@ resource vnetResource 'Microsoft.Network/virtualNetworks@2022-01-01' = {
           privateLinkServiceNetworkPolicies: 'Enabled'  
         }
       }
-      // [8] Key Vault private endpoint subnet
+      // [5] Key Vault private endpoint subnet
       {
         name: 'keyvault-subnet'
         properties:{
-          addressPrefix: '10.0.1.192/27'
+          addressPrefix: '10.0.1.128/27'
           privateEndpointNetworkPolicies: 'Disabled'
           privateLinkServiceNetworkPolicies: 'Enabled'
         }
       }
-      // [9] Azure SQL DB private endpoint subnet
+      // [6] Azure SQL DB private endpoint subnet
       {
         name: 'sql-server-subnet'
         properties:{
-          addressPrefix: '10.0.1.224/27'
+          addressPrefix: '10.0.1.160/27'
           privateEndpointNetworkPolicies: 'Disabled'
           privateLinkServiceNetworkPolicies: 'Enabled'
         }
@@ -427,7 +445,7 @@ resource blobStoragePepResource 'Microsoft.Network/privateEndpoints@2022-01-01' 
   tags: tags
   properties: {
     subnet: {
-      id: vnetResource.properties.subnets[3].id
+      id: vnetResource.properties.subnets[StorageSubnet].id
     }
     privateLinkServiceConnections: [
       {
@@ -462,7 +480,7 @@ resource tableStoragePepResource 'Microsoft.Network/privateEndpoints@2022-01-01'
   tags: tags
   properties: {
     subnet: {
-      id: vnetResource.properties.subnets[3].id
+      id: vnetResource.properties.subnets[StorageSubnet].id
     }
     privateLinkServiceConnections: [
       {
@@ -497,7 +515,7 @@ resource queueStoragePepResource 'Microsoft.Network/privateEndpoints@2022-01-01'
   tags: tags
   properties: {
     subnet: {
-      id: vnetResource.properties.subnets[3].id
+      id: vnetResource.properties.subnets[StorageSubnet].id
     }
     privateLinkServiceConnections: [
       {
@@ -532,7 +550,7 @@ resource fileStoragePepResource 'Microsoft.Network/privateEndpoints@2022-01-01' 
   tags: tags
   properties: {
     subnet: {
-      id: vnetResource.properties.subnets[3].id
+      id: vnetResource.properties.subnets[StorageSubnet].id
     }
     privateLinkServiceConnections: [
       {
@@ -567,7 +585,7 @@ resource redisPepResource 'Microsoft.Network/privateEndpoints@2022-01-01' = {
   tags: tags
   properties: {
     subnet: {
-      id: vnetResource.properties.subnets[4].id
+      id: vnetResource.properties.subnets[RedisSubnet].id
     }
     privateLinkServiceConnections: [
       {
@@ -602,7 +620,7 @@ resource servicebusPepResource 'Microsoft.Network/privateEndpoints@2022-01-01' =
   tags: tags
   properties: {
     subnet: {
-      id: vnetResource.properties.subnets[5].id
+      id: vnetResource.properties.subnets[ServiceBusSubnet].id
     }
     privateLinkServiceConnections: [
       {
@@ -637,7 +655,7 @@ resource sqlPepResource 'Microsoft.Network/privateEndpoints@2022-01-01' = {
   tags: tags
   properties: {
     subnet: {
-      id: vnetResource.properties.subnets[9].id
+      id: vnetResource.properties.subnets[SqlServerSubnet].id
     }
     privateLinkServiceConnections: [
       {
@@ -672,7 +690,7 @@ resource keyvaultPepResource 'Microsoft.Network/privateEndpoints@2022-01-01' = {
   tags: tags
   properties: {
     subnet: {
-      id: vnetResource.properties.subnets[8].id
+      id: vnetResource.properties.subnets[KeyVaultSubnet].id
     }
     privateLinkServiceConnections: [
       {
@@ -701,14 +719,13 @@ resource keyvaultPepResource 'Microsoft.Network/privateEndpoints@2022-01-01' = {
   }
 }
 
-
 // APP GW
 
 resource pipResource 'Microsoft.Network/publicIPAddresses@2022-05-01' = {
   name: appGwPip
   location: location
   tags: tags
-  zones: ['1', '2', '3']
+  zones: zones
   sku: {
     name: 'Standard'
   }
@@ -723,23 +740,25 @@ resource appGWResource 'Microsoft.Network/applicationGateways@2022-05-01' = {
   name: appGw
   location: location
   tags: tags
-  zones: ['1', '2', '3']
-  //TODO: {"code": "CannotSetResourceIdentity", "message": "Resource type 'Microsoft.Network/applicationGateways' does not support creation of 'SystemAssigned' resource identity. The supported types are 'UserAssigned'."}
-  // identity:{
-  //   type:'SystemAssigned'
-  // }
+  zones: zones
+  identity:{
+    type:'UserAssigned'
+    userAssignedIdentities: {
+      '${apimUserIdentityId}': {}
+    }
+  }
   properties: {
     sku: {
       name: 'WAF_v2'
       tier: 'WAF_v2'
-      capacity: 3
+      capacity: developmentEnvironment ? 1 : 3
     }
     gatewayIPConfigurations: [
       {
         name: 'appGatewayIpConfig'
         properties: {
           subnet: {
-            id: vnetResource.properties.subnets[0].id
+            id: vnetResource.properties.subnets[AppGwSubnet].id
           }
         }
       }
@@ -790,16 +809,21 @@ resource appGWResource 'Microsoft.Network/applicationGateways@2022-05-01' = {
           cookieBasedAffinity: 'Disabled'
           pickHostNameFromBackendAddress: true
           requestTimeout: appGwBackendRequestTimeout
-          connectionDraining: { 
-            enabled: false
-          }
           //TODO: Use well known CA certificate = Yes
+        }
+      }
+    ]
+    sslCertificates:[
+      {
+        name: appGwPublicSslCert
+        properties: {
+          keyVaultSecretId: apimSslCertKeyVaultId
         }
       }
     ]
     httpListeners: [
       {
-        name: 'publicHttpListener'
+        name: publicHttpListener
         properties: {
           firewallPolicy: {
             id: appGwWafPolicyResource.id
@@ -827,12 +851,8 @@ resource appGWResource 'Microsoft.Network/applicationGateways@2022-05-01' = {
             id: resourceId('Microsoft.Network/applicationGateways/frontendPorts', appGw, 'port_443')
           }
           protocol: 'Https'
-          requireServerNameIndication: true
-          sslCertificate: {
-            
-          }
-          sslProfile:{
-            
+          sslCertificate:{
+            id: resourceId('Microsoft.Network/applicationGateways/sslCertificates', appGw, appGwPublicSslCert)
           }
         }
       }
@@ -858,16 +878,10 @@ resource appGWResource 'Microsoft.Network/applicationGateways@2022-05-01' = {
           ruleType: 'Basic'
           priority: 10
           httpListener: {
-            id: resourceId('Microsoft.Network/applicationGateways/httpListeners', appGw, publicHttpsListener)
+            id: resourceId('Microsoft.Network/applicationGateways/httpListeners', appGw, publicHttpListener)
           }
           redirectConfiguration:{
-
-          }
-          backendAddressPool: {
-            id: resourceId('Microsoft.Network/applicationGateways/backendAddressPools', appGw, apimBackendPool)
-          }
-          backendHttpSettings: {
-            id: resourceId('Microsoft.Network/applicationGateways/backendHttpSettingsCollection', appGw, backendHttpSettings)
+            id: resourceId('Microsoft.Network/applicationGateways/redirectConfigurations', appGw, httpRedirectConfiguration)
           }
         }
       }
@@ -875,7 +889,7 @@ resource appGWResource 'Microsoft.Network/applicationGateways@2022-05-01' = {
         name: 'apimRoutingRule'
         properties: {
           ruleType: 'Basic'
-          priority: 10
+          priority: 20
           httpListener: {
             id: resourceId('Microsoft.Network/applicationGateways/httpListeners', appGw, publicHttpsListener)
           }
@@ -888,7 +902,7 @@ resource appGWResource 'Microsoft.Network/applicationGateways@2022-05-01' = {
         }
       }
     ]
-    enableHttp2: false
+    enableHttp2: true
     webApplicationFirewallConfiguration: {
       enabled: true
       firewallMode: 'Prevention'
@@ -937,16 +951,16 @@ resource apimResource 'Microsoft.ApiManagement/service@2021-12-01-preview' = {
   identity: {
     type: 'SystemAssigned'
   }
-  zones: [ '1', '2', '3' ]
+  zones: developmentEnvironment ? null : ['1', '2', '3']
   sku: {
-    name: apimSkuName
-    capacity: apimSkuName == 'Developer' ? 2 : 3
+    name: developmentEnvironment ? 'Developer' : 'Premium'
+    capacity: developmentEnvironment ? 1 : 3
   }
   properties: {
     publisherEmail: apimPublisherEmail
     publisherName: apimPublisherName
     virtualNetworkConfiguration: {
-      subnetResourceId: vnetResource.properties.subnets[0].id
+      subnetResourceId: vnetResource.properties.subnets[ApimSubnet].id
     }
     virtualNetworkType: 'Internal'
   }
@@ -991,8 +1005,8 @@ resource redisResource 'Microsoft.Cache/redis@2022-05-01' = {
     }
     minimumTlsVersion: '1.2'
     publicNetworkAccess: 'Disabled'
-    replicasPerMaster: 2
-    replicasPerPrimary: 2
+    replicasPerMaster: developmentEnvironment ? 1 : 2
+    replicasPerPrimary: developmentEnvironment ? 1 : 2
   }
 }
 

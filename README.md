@@ -38,6 +38,10 @@ All of the Azure services in this architecture are either always-available or zo
 
 ## Deployment Steps
 
+### 0. Prerequisites
+
+Azure Application Gateway requires an SSL/TLS certificate stored in an Azure Key Vault to create an HTTPS listener. For more information, see [Create and merge a certificate signing request in Key Vault](https://learn.microsoft.com/en-us/azure/key-vault/certificates/create-certificate-signing-request?tabs=azure-portal). Once you have completed the certificate signing request, make a note of the Key Vault name for step 3 below.
+
 ### 1. Clone this repo.
 
 ```
@@ -49,6 +53,21 @@ cd highly-available-zone-redundant-ipaas
 
 ```
 az group create --name hazripaas-wus3-rg --location westus3
+```
+
+### 3. Create a Managed Identity to access Key Vault
+
+In bash: 
+
+```bash
+principalId=(az identity create --name hazripaas-appgw-user --resource-group hazripaas-wus3-rg -q 'principalId' -o tsv)
+
+```
+
+In PowerShell:
+
+```powershell
+
 ```
 
 ### 3. Create a deployment
@@ -64,7 +83,7 @@ az deployment group create --resource-group hazripaas-wus3-rg --template-file ./
 `bicep/main.bicep` has several optional parameters that can be used to adjust deployment configuration. These can be passed inline with the `az deployment group create` command. For example:
 
 ```
-az deployment group create --resource-group hazripaas-wus3-rg --template-file ./bicep/main.bicep --parameters apimSkuName=Premium
+az deployment group create --resource-group hazripaas-wus3-rg --template-file ./bicep/main.bicep --parameters applicationName=myIPaaSApp
 ```
 
 | param | Description | Default value |
@@ -80,7 +99,8 @@ az deployment group create --resource-group hazripaas-wus3-rg --template-file ./
 | `cosmosContainerName` | Optional. Name of the Cosmos DB container to create. | `Container1` |
 | `cosmosPartitionKeys` | Optional. Array of properties that make up the Partition Key for the Cosmos DB container. | `[ 'id' ]` |
 | `servicebusQueueName` | Optional. Name of the Service Bus queue to create | `Queue1` |
-| `appServicePlanPremiumSku` | Optional. The version of App Service Premium SKU to deploy. Allowed values `PremiumV2` or `PremiumV3`. | `PremiumV3` |
+| `developmentEnvironment` | Optional. When true will deploy a cost-optimised environment for development purposes. Note that when this param = `true`, the deployment is not suitable or recommended for Production environments. | `false` |
+
 
 ## Instructions
 
